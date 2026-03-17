@@ -138,7 +138,11 @@ class AlmTransform:
         dtype: torch.dtype = torch.float32,
         device: Optional[Union[str, torch.device]] = None,
         debug: bool = False,
+        lon: np.ndarray = None,
+        lat: np.ndarray = None,
+        weights: np.array = None
     ) -> None:
+
         self.level = int(level)
         self.nest = bool(nest)
         self.ellipsoid = str(ellipsoid)
@@ -164,10 +168,11 @@ class AlmTransform:
 
         self.size = int(self.cell_ids.numel())
         
-        if self.nest:
-            lon,lat = healpix_geo.nested.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
-        else:
-            lon,lat = healpix_geo.ring.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
+        if lon is None:
+            if self.nest:
+                lon,lat = healpix_geo.nested.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
+            else:
+                lon,lat = healpix_geo.ring.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
         
         
         self.idx_ordering = lon.argsort()
@@ -179,6 +184,8 @@ class AlmTransform:
         self.N_max = int(np.max(self.N_k))
         self.idx_ring = idx_ring
         self.lon = (lon - np.min(lon))[self.idx_ordering]
+        if weights is None:
+            self.weights = self.N_max/self.N_k
         
 
     # ------------------------------------------------------------------
@@ -237,7 +244,7 @@ class AlmTransform:
             tmp[0:self.N_k[k]] = self._as_real_tensor(ldata[idx])
             tmp=torch.fft.fft(tmp)
             tmp_fft= self.shift_from_fft_phase(tmp,self.lon[idx[0]])
-            out_fft[:,k]=tmp_fft*self.N_max/self.N_k[k]
+            out_fft[:,k]=tmp_fft*self.weights[k]
 
         self.out_fft=out_fft
         return np.fft.fft(out_fft)
@@ -253,7 +260,7 @@ class AlmTransform:
         idata = np.zeros([self.size])
         for k in range(self.n_rings):
             idx = np.where(self.idx_ring==k)[0]
-            inv_fft = o_fft[:,k]*self.N_k[k]/self.N_max
+            inv_fft = o_fft[:,k]/self.weights[k]
             inv_fft = self.shift_from_fft_phase(inv_fft,-self.xa[idx[0]])
             idata[idx]=torch.fft.ifft(inv_fft)[0:self.N_k[k]].real
         return idata 

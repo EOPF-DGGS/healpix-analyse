@@ -7,6 +7,16 @@ from typing import Generic, Tuple, Optional, Sequence,Union
 
 ArrayLike = Union[np.ndarray, torch.Tensor, Sequence[float], Sequence[int]]
 
+import numpy as np
+import torch
+
+from healpix_analyse.alm import AlmTransform
+
+from typing import Sequence, Union, Optional
+
+ArrayLike = Union[np.ndarray, torch.Tensor, Sequence[float], Sequence[int]]
+
+
 def powerspectra(cell_ids,
                  level,
                  data,
