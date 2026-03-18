@@ -551,7 +551,7 @@ def comp_tf_latlon(
 
             # Apply per-ring phase shift exp(-i m φ_0)
             shift = torch.tensor(
-                np.exp(-1j * m_vec * phi0), dtype=cdtype
+                np.exp(-1j * m_vec * phi0), dtype=cdtype,device=tmp.device,
             )
             tmp = tmp * shift
 
