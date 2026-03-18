@@ -10,9 +10,10 @@ ArrayLike = Union[np.ndarray, torch.Tensor, Sequence[float], Sequence[int]]
 def powerspectra(cell_ids,
                  level,
                  data,
+                 ltf=None,
                  ellipsoid: str = "sphere",
                  method: str = "fft",
-                 indexing_scheme: str = "ring",
+                 indexing_scheme: str = "2D_array",
                  dx=1.0,
                  cross=None,
                  plot_2D_fft=False):
@@ -36,10 +37,15 @@ def powerspectra(cell_ids,
         """
         # 2D FFT and power
         
-        ltf = AlmTransform(cell_ids, level, ellipsoid=ellipsoid, method=method, indexing_scheme=indexing_scheme)
-        
-        F = np.fft.fftshift(ltf.fft(data))
-        
+        if ltf is None:
+            assert ltf is None, "If data is provided,ltf should not be provided."
+            ltf = AlmTransform(cell_ids, level, ellipsoid=ellipsoid, method=method, indexing_scheme=indexing_scheme)
+            F = np.fft.fftshift(ltf.fft(data))
+        else:
+            assert data is None, "If ltf is provided, data should be None (ltf already contains the data)."
+            assert cross is None
+            F = np.fft.fftshift(ltf)
+
         if cross is not None:
             F2 = np.fft.fftshift(ltf.fft(cross))
             P2D = (F*np.conjugate(F2)).real
