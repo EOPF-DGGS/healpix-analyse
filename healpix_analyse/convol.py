@@ -130,9 +130,15 @@ def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype):
 
     # Gauge base angle
     if gauge_type == "cosmo":
-        sign = torch.where(th_t <= math.pi / 2,
+        # Cosmological convention (Delouis et al. 2022 / SphericalStencil):
+        #   North hemisphere (θ ≤ π/2) :  alpha_base = −φ
+        #   South hemisphere (θ > π/2) :  alpha_base = +φ
+        # This produces the directional inversion between hemispheres
+        # visible in the wavelet orientation (see Fig. A.1 of the reference).
+        # Formula: alpha = 2 * ((th > π/2) − 0.5) * φ
+        sign = torch.where(th_t > (math.pi / 2),
                            torch.ones_like(th_t), -torch.ones_like(th_t))
-        alpha_base = 2.0 * sign * ph_t
+        alpha_base = sign * ph_t
     else:
         alpha_base = torch.zeros_like(th_t)
 
