@@ -130,29 +130,30 @@ def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype):
 
     # Gauge base angle
     if gauge_type == "cosmo":
-        # Cosmological convention (Delouis et al. 2022, Fig. A.1):
-        # The kernel is meridian-aligned everywhere (no rotation with longitude),
-        # but its direction is FLIPPED by 180° between the two hemispheres.
-        # This hemisphere inversion is the only angular effect:
-        #   North (θ ≤ π/2) :  alpha_base = 0      (no rotation)
-        #   South (θ > π/2) :  alpha_base = π      (180° flip)
+        # Exact replication of SphericalStencil._rotation_total_torch with gauge_cosmo=True.
         #
-        # Why NOT alpha = ±φ:
-        #   R_base = Rz(φ) @ Ry(θ) already carries the local frame as φ varies.
-        #   Adding alpha = ±φ on top compounds with the Rz(φ) in R_base and
-        #   produces a rotation rate of ±2φ → the kernel completes two full
-        #   turns per longitude circle instead of zero.
-        alpha_base = torch.where(
-            th_t > (math.pi / 2),
-            torch.full_like(th_t, math.pi),   # South: 180° flip
-            torch.zeros_like(th_t),            # North: meridian-aligned
-        )
+        # Step 1 — base angle (mirrors SphericalStencil.prepare_torch):
+        #   alpha = 2 * ((th > π/2) - 0.5) * φ
+        #   North (θ ≤ π/2) :  alpha_base = -φ
+        #   South (θ > π/2) :  alpha_base = +φ
+        #
+        # Step 2 — g_shifts are applied with a per-hemisphere sign
+        #   (mirrors the gauge_cosmo branch in _rotation_total_torch):
+        #   North :  sign = +1   →  alpha_g = alpha_base + g * π/G
+        #   South :  sign = -1   →  alpha_g = alpha_base - g * π/G
+        is_south    = th_t > math.pi / 2
+        alpha_base  = torch.where(is_south,  ph_t, -ph_t)          # [K]
+        sign_g      = torch.where(is_south,
+                                  -torch.ones_like(th_t),
+                                   torch.ones_like(th_t))           # [K]
     else:
+        # "phi" gauge: no base angle, g_shifts are always positive
         alpha_base = torch.zeros_like(th_t)
+        sign_g     = torch.ones_like(th_t)
 
     # G gauge angles: [K, G]
     g_shifts = torch.arange(G, device=device, dtype=dtype) * (math.pi / G)
-    alpha_g  = alpha_base[:, None] + g_shifts[None, :]
+    alpha_g  = alpha_base[:, None] + sign_g[:, None] * g_shifts[None, :]
     ca = torch.cos(alpha_g);  sa = torch.sin(alpha_g)
 
     # Rodrigues rotation around n by alpha_g
