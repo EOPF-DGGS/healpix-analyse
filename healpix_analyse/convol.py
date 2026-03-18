@@ -130,15 +130,23 @@ def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype):
 
     # Gauge base angle
     if gauge_type == "cosmo":
-        # Cosmological convention (Delouis et al. 2022 / SphericalStencil):
-        #   North hemisphere (θ ≤ π/2) :  alpha_base = −φ
-        #   South hemisphere (θ > π/2) :  alpha_base = +φ
-        # This produces the directional inversion between hemispheres
-        # visible in the wavelet orientation (see Fig. A.1 of the reference).
-        # Formula: alpha = 2 * ((th > π/2) − 0.5) * φ
-        sign = torch.where(th_t > (math.pi / 2),
-                           torch.ones_like(th_t), -torch.ones_like(th_t))
-        alpha_base = sign * ph_t
+        # Cosmological convention (Delouis et al. 2022, Fig. A.1):
+        # The kernel is meridian-aligned everywhere (no rotation with longitude),
+        # but its direction is FLIPPED by 180° between the two hemispheres.
+        # This hemisphere inversion is the only angular effect:
+        #   North (θ ≤ π/2) :  alpha_base = 0      (no rotation)
+        #   South (θ > π/2) :  alpha_base = π      (180° flip)
+        #
+        # Why NOT alpha = ±φ:
+        #   R_base = Rz(φ) @ Ry(θ) already carries the local frame as φ varies.
+        #   Adding alpha = ±φ on top compounds with the Rz(φ) in R_base and
+        #   produces a rotation rate of ±2φ → the kernel completes two full
+        #   turns per longitude circle instead of zero.
+        alpha_base = torch.where(
+            th_t > (math.pi / 2),
+            torch.full_like(th_t, math.pi),   # South: 180° flip
+            torch.zeros_like(th_t),            # North: meridian-aligned
+        )
     else:
         alpha_base = torch.zeros_like(th_t)
 
