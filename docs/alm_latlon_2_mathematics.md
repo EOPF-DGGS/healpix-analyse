@@ -289,9 +289,9 @@ mantissa in a safe numerical range without losing relative precision.
 The raw recurrence produces values scaled by $\sqrt{4\pi}$.  In `map2alm_latlon`,
 the factor $\sqrt{(2\ell+1)/4\pi}$ is applied to recover the true $Y_{\ell m}(\theta, 0)$:
 
-$$
+$$ 
 Y_{\ell m}(\theta, 0) = \underbrace{\frac{\sqrt{2\ell+1}}{4\pi}}_{\text{applied in code}}
-\times \underbrace{\sqrt{4\pi} \cdot \tilde{P}_{\ell m}(\cos\theta)}_{\text{output of \_compute\_legendre\_m}}
+\times \underbrace{\sqrt{4\pi} \cdot \tilde{P}_{\ell m}(\cos\theta)}_{\text{output of compute legendre}}
 $$
 
 ---
