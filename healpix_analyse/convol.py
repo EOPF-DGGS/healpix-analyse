@@ -99,7 +99,7 @@ def _restore_output_conv(t, is_numpy, was_1d):
 # Geometry helpers
 # ===========================================================================
 
-def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype):
+def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype, ref_direction=None):
     """
     Build rotation matrices [K, G, 3, 3] that carry the North-Pole kernel
     grid to each of the K target pixels with G gauge angles.
@@ -130,24 +130,56 @@ def _build_rotation_matrices(th, ph, G, gauge_type, device, dtype):
 
     # Gauge base angle
     if gauge_type == "cosmo":
-        # Exact replication of SphericalStencil._rotation_total_torch with gauge_cosmo=True.
+        # Exact replication of SphericalStencil._rotation_total_torch (gauge_cosmo=True).
+        #   alpha_base = -phi (North, θ ≤ π/2) / +phi (South, θ > π/2)
+        #   g_shifts sign = +1 North / -1 South
+        is_south   = th_t > math.pi / 2
+        alpha_base = torch.where(is_south,  ph_t, -ph_t)
+        sign_g     = torch.where(is_south,
+                                 -torch.ones_like(th_t),
+                                  torch.ones_like(th_t))
+
+    elif gauge_type == "projected_ref":
+        # ── "Projected reference" gauge ──────────────────────────────────
+        # Optimal gauge for minimising hairy-ball artefacts:
+        # a fixed 3-D reference vector r is projected onto the tangent plane
+        # of each pixel; the orientation angle is atan2(r·e_phi, r·e_theta).
         #
-        # Step 1 — base angle (mirrors SphericalStencil.prepare_torch):
-        #   alpha = 2 * ((th > π/2) - 0.5) * φ
-        #   North (θ ≤ π/2) :  alpha_base = -φ
-        #   South (θ > π/2) :  alpha_base = +φ
+        # Properties:
+        #   - Smooth everywhere except at 2 antipodal singularities (where r ∥ n).
+        #   - You choose where those singularities are by choosing r:
+        #       r = [1,0,0]  →  (θ=π/2, φ=0°)  and  (θ=π/2, φ=180°)   [equatorial]
+        #       r = [0,1,0]  →  (θ=π/2, φ=90°) and  (θ=π/2, φ=270°)   [equatorial]
+        #       r = [0,0,1]  →  geographic poles  (same as "phi")
+        #   - The two singularities are always antipodal and on a great circle
+        #     perpendicular to r.
+        #   - g_shifts are always positive (no hemisphere flip needed).
         #
-        # Step 2 — g_shifts are applied with a per-hemisphere sign
-        #   (mirrors the gauge_cosmo branch in _rotation_total_torch):
-        #   North :  sign = +1   →  alpha_g = alpha_base + g * π/G
-        #   South :  sign = -1   →  alpha_g = alpha_base - g * π/G
-        is_south    = th_t > math.pi / 2
-        alpha_base  = torch.where(is_south,  ph_t, -ph_t)          # [K]
-        sign_g      = torch.where(is_south,
-                                  -torch.ones_like(th_t),
-                                   torch.ones_like(th_t))           # [K]
+        # Local orthonormal basis at pixel (θ, φ):
+        #   e_theta = ( cosθ cosφ,  cosθ sinφ, -sinθ )   (southward)
+        #   e_phi   = (     -sinφ,       cosφ,   0   )   (eastward)
+        #   n       = ( sinθ cosφ,  sinθ sinφ,  cosθ )   (outward normal)
+        if ref_direction is None:
+            ref_direction = [1.0, 0.0, 0.0]
+        r = torch.as_tensor(ref_direction, device=device, dtype=dtype)
+        r = r / r.norm().clamp_min(1e-12)
+
+        e_th = torch.stack([ ct * cp,  ct * sp, -st], dim=1)          # [K,3]
+        e_ph = torch.stack([-sp,        cp,      torch.zeros_like(st)], dim=1)  # [K,3]
+        n_pix = torch.stack([st * cp,  st * sp,  ct], dim=1)           # [K,3]
+
+        # Project r onto tangent plane: r_proj = r - (r·n)*n
+        r_dot_n = (r[None, :] * n_pix).sum(dim=1, keepdim=True)        # [K,1]
+        r_proj  = r[None, :] - r_dot_n * n_pix                         # [K,3]
+
+        r_eth = (r_proj * e_th).sum(dim=1)   # southward component [K]
+        r_eph = (r_proj * e_ph).sum(dim=1)   # eastward component  [K]
+
+        alpha_base = torch.atan2(r_eph, r_eth)   # [K], singular where r_proj≈0
+        sign_g     = torch.ones_like(th_t)
+
     else:
-        # "phi" gauge: no base angle, g_shifts are always positive
+        # "phi": no base angle, g_shifts always positive
         alpha_base = torch.zeros_like(th_t)
         sign_g     = torch.ones_like(th_t)
 
@@ -320,6 +352,7 @@ class HealPixConv(nn.Module):
         kernel_sz: int = 3,
         n_gauges: int = 1,
         gauge_type: str = "phi",
+        ref_direction=None,
         cell_ids=None,
         level=None,
         nest: bool = True,
@@ -346,9 +379,17 @@ class HealPixConv(nn.Module):
             raise ValueError("nside must be a positive power of 2.")
         if self.kernel_sz < 1 or self.kernel_sz % 2 == 0:
             raise ValueError("kernel_sz must be a positive odd integer.")
-        if gauge_type not in ("phi", "cosmo"):
-            raise ValueError("gauge_type must be 'phi' or 'cosmo'.")
+        if gauge_type not in ("phi", "cosmo", "projected_ref"):
+            raise ValueError("gauge_type must be 'phi', 'cosmo', or 'projected_ref'.")
         self.gauge_type = gauge_type
+
+        # Store reference direction for "projected_ref" gauge.
+        # Default: x-axis → singularities at (θ=π/2, φ=0°) and (θ=π/2, φ=180°).
+        if ref_direction is not None:
+            rd = np.asarray(ref_direction, dtype=np.float64).ravel()
+            self.ref_direction = rd / np.linalg.norm(rd)
+        else:
+            self.ref_direction = np.array([1.0, 0.0, 0.0], dtype=np.float64)
 
         # ---- pixel domain ----
         self.partial = cell_ids is not None
@@ -366,7 +407,8 @@ class HealPixConv(nn.Module):
         th, ph = hp.pix2ang(self.nside, ids_np.tolist(), nest=self.nest)
 
         R_tot = _build_rotation_matrices(
-            th, ph, self.G, self.gauge_type, self.device, self.dtype
+            th, ph, self.G, self.gauge_type, self.device, self.dtype,
+            ref_direction=self.ref_direction,
         )  # [K, G, 3, 3]
 
         vec_t = torch.as_tensor(
