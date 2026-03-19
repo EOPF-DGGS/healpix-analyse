@@ -7,15 +7,27 @@ from typing import Generic, Tuple, Optional, Sequence,Union
 
 ArrayLike = Union[np.ndarray, torch.Tensor, Sequence[float], Sequence[int]]
 
+import numpy as np
+import torch
+
+from healpix_analyse.alm import AlmTransform
+
+from typing import Sequence, Union, Optional
+
+ArrayLike = Union[np.ndarray, torch.Tensor, Sequence[float], Sequence[int]]
+
+
 def powerspectra(cell_ids,
                  level,
                  data,
-                ellipsoid: str = "sphere",
-                method: str = "fft",
+                 ellipsoid: str = "sphere",
+                 method: str = "fft",
+                 indexing_scheme: str = "ring",
                  dx=1.0,
-                 cross=None):
+                 cross=None,
+                 plot_2D_fft=False):
         """
-        Compute the isotropic 1D power spectrum of a 2D field.
+        Compute the isotropic 1D power spectrum of a 2D HEALPix field.
     
         Parameters
         ----------
@@ -28,13 +40,13 @@ def powerspectra(cell_ids,
         Returns
         -------
         f_centers : ndarray
-            Radial spatial frequencies (cycles per unit length), e.g., m^-1 if dx is in meters.
+            Array of radial spatial frequencies (cycles per unit length), e.g., m^-1 if dx is in meters.
         Pk : ndarray
             Azimuthally averaged power spectrum over radial frequency bins (arbitrary units unless you add a normalization).
         """
         # 2D FFT and power
         
-        ltf = AlmTransform(cell_ids,level,ellipsoid=ellipsoid)
+        ltf = AlmTransform(cell_ids, level, ellipsoid=ellipsoid, method=method, indexing_scheme=indexing_scheme)
         
         F = np.fft.fftshift(ltf.fft(data))
         
@@ -44,6 +56,12 @@ def powerspectra(cell_ids,
         else:
             P2D = np.abs(F) ** 2
         del ltf
+
+        if plot_2D_fft:
+            import matplotlib.pyplot as plt
+            plt.imshow(np.fft.fftshift(P2D), norm='log')
+            plt.colorbar(label='Power (log scale)', orientation='horizontal')
+            plt.show()
     
         # Spatial frequency grids (cycles per unit length; NOT radians)
         ny, nx = F.shape

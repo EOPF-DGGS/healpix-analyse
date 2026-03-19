@@ -107,8 +107,8 @@ class AlmTransform:
         HEALPix level such that nside = 2**level.
     cell_ids : array-like
         HEALPix cell identifiers at the given level.
-    nest : boolean
-        cell_ids are oderred following the Nested HEALPix convention.
+    indexing_scheme : str, default="ring"
+        The indexing scheme for the cell IDs.
     ellipsoid : {"sphere", "WGS84"}, default="sphere"
         Geometry model. Ignored in this version but stored for compatibility.
     method : {"fft", "alm"}, default="fft", Alm approximation, alm option under development.
@@ -132,15 +132,19 @@ class AlmTransform:
         self,
         cell_ids: ArrayLike,
         level: int,
-        nest: bool = True,
+        indexing_scheme: str = "ring",
         ellipsoid: str = "sphere",
         method: str = "fft",
         dtype: torch.dtype = torch.float32,
         device: Optional[Union[str, torch.device]] = None,
         debug: bool = False,
+        lon: np.ndarray = None,
+        lat: np.ndarray = None,
+        weights: np.array = None
     ) -> None:
+
         self.level = int(level)
-        self.nest = bool(nest)
+        self.indexing_scheme = str(indexing_scheme)
         self.ellipsoid = str(ellipsoid)
         self.method = str(method)
         self.dtype = dtype
@@ -164,14 +168,21 @@ class AlmTransform:
 
         self.size = int(self.cell_ids.numel())
         
-        if self.nest:
-            lon,lat = healpix_geo.nested.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
+
+        if lon is None:
+            if self.indexing_scheme == "ring":
+                lon, lat = healpix_geo.ring.healpix_to_lonlat(cell_ids, level, ellipsoid=ellipsoid)
+                self.idx_ordering = lon.argsort() # TODO: optimize knowing that it is already sorted
+            else:
+                if self.indexing_scheme == "nested":
+                    lon, lat = healpix_geo.nested.healpix_to_lonlat(cell_ids, level, ellipsoid=ellipsoid)
+                else:
+                    raise NotImplementedError("For now, indexing_scheme must be 'ring' or 'nested'")
+                self.idx_ordering = lon.argsort()
         else:
-            lon,lat = healpix_geo.ring.healpix_to_lonlat(cell_ids, level,ellipsoid=ellipsoid)
+            self.idx_ordering = lon.argsort()
         
-        
-        self.idx_ordering = lon.argsort()
-        
+        # TODO: optimize knowing that it is already sorted
         theta_uniq, idx_ring = np.unique(lat[self.idx_ordering], return_inverse=True)
     
         self.n_rings = len(theta_uniq)
@@ -179,6 +190,8 @@ class AlmTransform:
         self.N_max = int(np.max(self.N_k))
         self.idx_ring = idx_ring
         self.lon = (lon - np.min(lon))[self.idx_ordering]
+        if weights is None:
+            self.weights = self.N_max/self.N_k
         
 
     # ------------------------------------------------------------------
@@ -227,20 +240,58 @@ class AlmTransform:
         self,
         data: ArrayLike,
     ) -> ArrayLike:
+        # TODO: implement rfft
          
-        ldata=data[self.idx_ordering]
-        out_fft = torch.zeros([self.N_max,self.n_rings],dtype=self.cdtype)
+        ldata = data[self.idx_ordering]
+        out_fft = torch.zeros([self.n_rings*2,self.N_max], dtype=self.cdtype)
         
         for k in range(self.n_rings):
-            idx = np.where(self.idx_ring==k)[0]
-            tmp=torch.zeros([self.N_max])
-            tmp[0:self.N_k[k]] = self._as_real_tensor(ldata[idx])
-            tmp=torch.fft.fft(tmp)
-            tmp_fft= self.shift_from_fft_phase(tmp,self.lon[idx[0]])
-            out_fft[:,k]=tmp_fft*self.N_max/self.N_k[k]
+            idx = np.where(self.idx_ring==k)[0] # TODO: optimize knowing that it is already sorted?????????????
+            if not torch.is_tensor(ldata):
+                ldata = torch.as_tensor(ldata)
+            ring_data = ldata[idx]
+            
+            # 1D FFT on latitude ring k
+            if torch.is_complex(ring_data): 
+                tmp_fft = torch.fft.fft(ring_data)
+                cutoff = ring_data.shape[0]//2+1 # si n pair : coupure à n/2 inclus, si n impair : coupure à (n-1)/2 = n//2 inclus
+                tmp_pos_freq = tmp_fft[:cutoff] 
+                tmp_neg_freq = tmp_fft[cutoff:]
+            else:
+                tmp_fft = torch.fft.rfft(ring_data)
+                tmp_pos_freq = tmp_fft # len n//2+1
+                tmp_neg_freq = tmp_fft[1:ring_data.shape[0] - ring_data.shape[0]//2] # do not copy Nyquist if n even, len n - n//2 - 1
+                tmp_neg_freq = tmp_neg_freq.flip(dims=[0]) # reverse negative frequencies to match FFT convention
 
-        self.out_fft=out_fft
-        return np.fft.fft(out_fft)
+            # apply upsampling with padding in Fourier space
+            tmp_fft = torch.zeros(self.N_max, dtype=tmp_fft.dtype, device=tmp_fft.device)
+            tmp_fft[:tmp_pos_freq.shape[0]] = tmp_pos_freq
+            tmp_fft[-tmp_neg_freq.shape[0]:] = tmp_neg_freq
+
+            # Apply phase shift to align with the original longitude
+            tmp_fft = self.shift_from_fft_phase(tmp_fft, self.lon[idx[0]])
+            # TODO: raise Warning if phase shift is large
+
+            # Normalize
+            out_fft[k]  = tmp_fft * self.N_max / self.N_k[k]
+            if k>0:
+                out_fft[-k] = - out_fft[k].flip(dims=[0])
+        
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.imshow(abs(out_fft)+1E-7, norm='log')
+        plt.colorbar(label='Power (log scale)', orientation='horizontal')
+
+        
+        # parallel 1D FFTs along latitude axis
+        # TODO: NUFFT or direct Legendre analysis for the second stage, currently only FFT stage implemented
+        out_fft = np.fft.fft(out_fft) 
+        #out_fft = torch.fft.nufft(out_fft, dim=1)
+        
+        # TODO: Legendre analysis over colatitude to get final Alm coefficients, currently only FFT stage implemented
+        # TODO: Should we reorder the output to match the original cell ordering?
+
+        return out_fft
 
 
     def ifft(
@@ -253,7 +304,7 @@ class AlmTransform:
         idata = np.zeros([self.size])
         for k in range(self.n_rings):
             idx = np.where(self.idx_ring==k)[0]
-            inv_fft = o_fft[:,k]*self.N_k[k]/self.N_max
+            inv_fft = o_fft[:,k]/self.weights[k]
             inv_fft = self.shift_from_fft_phase(inv_fft,-self.xa[idx[0]])
             idata[idx]=torch.fft.ifft(inv_fft)[0:self.N_k[k]].real
         return idata 
