@@ -28,14 +28,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
-
-try:
-    import healpy as hp
-except ImportError as e:
-    raise ImportError(
-        "healpy is required by healpix_analyse.down. "
-        "Install it with:  pip install healpy"
-    ) from e
+import healpix_geo
 
 # ---------------------------------------------------------------------------
 # Type alias
@@ -169,6 +162,7 @@ class HealPixDown(nn.Module):
         self,
         nside_in: int,
         mode: str = "smooth",
+        ellipsoid: str = "WGS84",
         radius_deg: Optional[float] = None,
         sigma_deg: Optional[float] = None,
         weight_norm: str = "l1",
@@ -184,6 +178,7 @@ class HealPixDown(nn.Module):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(device)
         self.dtype = dtype
+        self.ellipsoid = ellipsoid
 
         # ---- validate nside ----
         self.nside_in = int(nside_in)
@@ -294,7 +289,8 @@ class HealPixDown(nn.Module):
         rows, cols, vals = [], [], []
 
         for i_out, p_out in enumerate(cell_ids_out):
-            theta0, phi0 = hp.pix2ang(self.nside_out, int(p_out), nest=True)
+            #theta0, phi0 = hp.pix2ang(self.nside_out, int(p_out), nest=True)
+            theta0, phi0 = healpix_geo.nested.healpix_to_lonlat(int(p_out), int(np.log2(self.nside_out)),ellipsoid=self.ellipsoid)
             lat0 = 0.5 * np.pi - theta0
 
             # Query fine pixels within the disc

@@ -36,7 +36,7 @@ Output shape:           [G*C_out, N] or [B, G*C_out, N]
 Both numpy arrays and torch tensors are accepted; the return type mirrors
 the input type.
 
-Dependencies: numpy, torch, healpy.
+Dependencies: numpy, torch.
 """
 
 from __future__ import annotations
@@ -48,7 +48,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import healpix_geo as hp
 
+'''
 try:
     import healpy as hp
 except ImportError as e:
@@ -56,6 +58,7 @@ except ImportError as e:
         "healpy is required by healpix_analyse.convol. "
         "Install it with:  pip install healpy"
     ) from e
+'''
 
 ArrayLike = Union[np.ndarray, torch.Tensor]
 
