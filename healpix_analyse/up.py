@@ -28,7 +28,9 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
+import healpix_geo
 
+'''
 try:
     import healpy as hp
 except ImportError as e:
@@ -36,6 +38,7 @@ except ImportError as e:
         "healpy is required by healpix_analyse.up. "
         "Install it with:  pip install healpy"
     ) from e
+'''
 
 from healpix_analyse.down import HealPixDown, _prepare_input, _restore_output
 
@@ -124,6 +127,7 @@ class HealPixUp(nn.Module):
         weight_norm: str = "l1",
         up_norm: str = "col_l1",
         eps: float = 1e-12,
+        ellipsoid: str = "WGS84",
         cell_ids: Optional[ArrayLike] = None,
         level: Optional[int] = None,
         device: Optional[Union[str, torch.device]] = None,
@@ -136,6 +140,7 @@ class HealPixUp(nn.Module):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(device)
         self.dtype = dtype
+        self.ellipsoid = ellipsoid
 
         # ---- validate nside ----
         self.nside_in  = int(nside_in)
