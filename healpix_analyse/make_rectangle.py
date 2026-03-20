@@ -1,4 +1,4 @@
-from cdshealpix import to_ring
+from cdshealpix import from_ring, to_ring
 import healpix_geo
 import numpy as np
 
@@ -28,6 +28,7 @@ def make_healpix_rectangle_from_lonlat(bbox, level, ellipsoid):
 
     cell_ids_2D_array = np.zeros((n_rings, N_max), dtype=ring_cell_ids.dtype) - 1 # initialize with -1 to indicate empty cells
 
+    # TODO: vectorize this loop
     for k in range(n_rings):
         idx = np.where(idx_ring==k)[0]
         ring_k_cell_ids = ring_cell_ids[idx]
@@ -46,3 +47,15 @@ def make_healpix_rectangle_from_lonlat(bbox, level, ellipsoid):
         cell_ids_2D_array[k] = ring_k_cell_ids
 
     return cell_ids_2D_array
+
+def intersect_with_nested_cell_ids(cell_ids_2D_array, nested_cell_ids, level):
+
+    common_cell_ids, nested_inds, ring_2D_array_inds = np.intersect1d(
+        to_ring(nested_cell_ids, depth=level), 
+        cell_ids_2D_array.flatten(), 
+        assume_unique=True,
+        return_indices=True)
+
+    ring_2D_array_inds = np.reshape(ring_2D_array_inds, cell_ids_2D_array.shape)
+
+    return common_cell_ids, nested_inds, ring_2D_array_inds
