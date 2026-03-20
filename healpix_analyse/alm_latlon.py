@@ -682,7 +682,7 @@ def map2alm_latlon(
         ylm_factor = np.sqrt(2.0 * l_vals + 1.0) / (4.0 * math.pi)  # [L]
         plm = plm_raw * ylm_factor[:, np.newaxis]                     # [L, R]
 
-        plm_t = torch.tensor(plm, dtype=torch.complex128)             # [L, R]
+        plm_t = torch.tensor(plm, dtype=torch.complex128,device=ft.device)             # [L, R]
 
         # ft_m: [..., R]  — Fourier coefficient at order m for every ring
         ft_m = ft[..., :, m]
