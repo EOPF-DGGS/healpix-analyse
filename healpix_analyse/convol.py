@@ -635,6 +635,7 @@ class HealPixConv(nn.Module):
         ellipsoid: str = "WGS84",
         dtype: torch.dtype = torch.float32,
         cache_dir: "Path | str | None" = _DEFAULT_CACHE_DIR,
+        share_weights: bool = False,
     ):
         super().__init__()
 
@@ -651,6 +652,7 @@ class HealPixConv(nn.Module):
         self.G            = int(max(1, n_gauges))
         self.P            = self.kernel_sz * self.kernel_sz
         self.nest         = bool(nest)
+        self.share_weights = bool(share_weights)
 
         if (self.nside & (self.nside - 1)) != 0 or self.nside < 1:
             raise ValueError("nside must be a positive power of 2.")
@@ -884,24 +886,42 @@ class HealPixConv(nn.Module):
                 )
 
         # ---- learnable kernel and bias ----
-        self.weight = nn.Parameter(
-            torch.empty(
-                self.G, self.in_channels, self.out_channels, self.P,
-                device=self.device, dtype=self.dtype,
+        # share_weights=True  → weight [C_in, C_out, P]  (same kernel for all G gauges)
+        # share_weights=False → weight [G, C_in, C_out, P] (independent kernel per gauge)
+        if self.share_weights:
+            self.weight = nn.Parameter(
+                torch.empty(
+                    self.in_channels, self.out_channels, self.P,
+                    device=self.device, dtype=self.dtype,
+                )
             )
-        )
-        nn.init.kaiming_uniform_(
-            self.weight.view(
-                self.G * self.in_channels, self.out_channels * self.P
-            ),
-            a=0., mode="fan_in", nonlinearity="relu",
-        )
-        self.bias = nn.Parameter(
-            torch.zeros(
-                self.G * self.out_channels,
-                device=self.device, dtype=self.dtype,
+            nn.init.kaiming_uniform_(
+                self.weight.view(self.in_channels, self.out_channels * self.P),
+                a=0., mode="fan_in", nonlinearity="relu",
             )
-        )
+            # Bias shared across all G gauges: shape [C_out]
+            self.bias = nn.Parameter(
+                torch.zeros(self.out_channels, device=self.device, dtype=self.dtype)
+            )
+        else:
+            self.weight = nn.Parameter(
+                torch.empty(
+                    self.G, self.in_channels, self.out_channels, self.P,
+                    device=self.device, dtype=self.dtype,
+                )
+            )
+            nn.init.kaiming_uniform_(
+                self.weight.view(
+                    self.G * self.in_channels, self.out_channels * self.P
+                ),
+                a=0., mode="fan_in", nonlinearity="relu",
+            )
+            self.bias = nn.Parameter(
+                torch.zeros(
+                    self.G * self.out_channels,
+                    device=self.device, dtype=self.dtype,
+                )
+            )
 
         # ---- optional GroupNorm + ReLU ----
         self.use_norm = bool(use_norm)
@@ -935,15 +955,22 @@ class HealPixConv(nn.Module):
         requires_grad : bool, default False
         """
         W_np = np.asarray(W, dtype=np.float32)
-        if W_np.ndim == 3:
-            W_np = np.broadcast_to(W_np[None], (self.G,) + W_np.shape).copy()
-        expected = (self.G, self.in_channels, self.out_channels, self.P)
-        if W_np.shape != expected:
-            raise ValueError(
-                f"W must have shape {expected} or "
-                f"({self.in_channels}, {self.out_channels}, {self.P}); "
-                f"got {W_np.shape}."
-            )
+        if self.share_weights:
+            expected = (self.in_channels, self.out_channels, self.P)
+            if W_np.shape != expected:
+                raise ValueError(
+                    f"share_weights=True: W must have shape {expected}; got {W_np.shape}."
+                )
+        else:
+            if W_np.ndim == 3:
+                W_np = np.broadcast_to(W_np[None], (self.G,) + W_np.shape).copy()
+            expected = (self.G, self.in_channels, self.out_channels, self.P)
+            if W_np.shape != expected:
+                raise ValueError(
+                    f"W must have shape {expected} or "
+                    f"({self.in_channels}, {self.out_channels}, {self.P}); "
+                    f"got {W_np.shape}."
+                )
         with torch.no_grad():
             self.weight.copy_(
                 torch.as_tensor(W_np, dtype=self.dtype, device=self.device)
@@ -1068,29 +1095,68 @@ class HealPixConv(nn.Module):
         #     .view(G, B, K, C_out).permute(1, 0, 3, 2) → [B, G, C_out, K]
         #     .reshape(B, G*C_out, K)
         # ------------------------------------------------------------------
-        g_mat = (
-            gathered
-            .permute(2, 0, 3, 1, 4)     # [G, B, K, C_in, P]
-            .contiguous()
-            .view(G, B * K, C_in * P)   # [G, B*K, C_in*P]
-        )
-        W_mat = (
-            W
-            .permute(0, 1, 3, 2)        # [G, C_in, P, C_out]
-            .contiguous()
-            .view(G, C_in * P, C_out)   # [G, C_in*P, C_out]
-        )
-        y = torch.bmm(g_mat, W_mat)     # [G, B*K, C_out]
-        y = (
-            y
-            .view(G, B, K, C_out)
-            .permute(1, 0, 3, 2)        # [B, G, C_out, K]
-            .contiguous()
-            .view(B, G * C_out, K)      # [B, G*C_out, K]
-        )
+        if self.share_weights:
+            # ---- Shared-weight path ------------------------------------------------
+            # W: [C_in, C_out, P]  — same kernel applied to all G gauge rotations.
+            #
+            # Reshape plan:
+            #   gathered [B, C_in, G, K, P]
+            #     .permute(2, 0, 3, 1, 4) → [G, B, K, C_in, P]
+            #     .contiguous().view(G*B*K, C_in*P)
+            #   W [C_in, C_out, P]
+            #     .permute(0, 2, 1).contiguous().view(C_in*P, C_out)
+            #   matmul → [G*B*K, C_out]
+            #     .view(G, B, K, C_out).permute(1, 0, 3, 2) → [B, G, C_out, K]
+            #     .reshape(B, G*C_out, K)
+            # -----------------------------------------------------------------------
+            g_mat = (
+                gathered
+                .permute(2, 0, 3, 1, 4)          # [G, B, K, C_in, P]
+                .contiguous()
+                .view(G * B * K, C_in * P)        # [G*B*K, C_in*P]
+            )
+            W_mat = (
+                W
+                .permute(0, 2, 1)                 # [C_in, P, C_out]
+                .contiguous()
+                .view(C_in * P, C_out)            # [C_in*P, C_out]
+            )
+            y = (
+                (g_mat @ W_mat)                   # [G*B*K, C_out]
+                .view(G, B, K, C_out)
+                .permute(1, 0, 3, 2)              # [B, G, C_out, K]
+                .contiguous()
+                .view(B, G * C_out, K)            # [B, G*C_out, K]
+            )
+            # Shared bias: add [C_out] to each of the G gauge slices
+            bias = self.bias.to(device=t.device, dtype=t.dtype)
+            y = y.view(B, G, C_out, K) + bias.view(1, 1, C_out, 1)
+            y = y.view(B, G * C_out, K)
+        else:
+            # ---- Per-gauge weight path (original) ---------------------------------
+            g_mat = (
+                gathered
+                .permute(2, 0, 3, 1, 4)     # [G, B, K, C_in, P]
+                .contiguous()
+                .view(G, B * K, C_in * P)   # [G, B*K, C_in*P]
+            )
+            W_mat = (
+                W
+                .permute(0, 1, 3, 2)        # [G, C_in, P, C_out]
+                .contiguous()
+                .view(G, C_in * P, C_out)   # [G, C_in*P, C_out]
+            )
+            y = torch.bmm(g_mat, W_mat)     # [G, B*K, C_out]
+            y = (
+                y
+                .view(G, B, K, C_out)
+                .permute(1, 0, 3, 2)        # [B, G, C_out, K]
+                .contiguous()
+                .view(B, G * C_out, K)      # [B, G*C_out, K]
+            )
+            # Per-gauge bias
+            y = y + self.bias.to(device=t.device, dtype=t.dtype).view(1, -1, 1)
 
-        # Bias + unsort
-        y = y + self.bias.to(device=t.device, dtype=t.dtype).view(1, -1, 1)
         y = y[:, :, io]                                    # [B, G*C_out, K]
 
         if self.use_norm and self.norm is not None:
@@ -1139,7 +1205,8 @@ class HealPixConv(nn.Module):
         base = (
             f"nside={self.nside}, in={self.in_channels}, out={self.out_channels}, "
             f"kernel_sz={self.kernel_sz}, P={self.P}, G={self.G}, "
-            f"gauge={self.gauge_type!r}, partial={self.partial}"
+            f"gauge={self.gauge_type!r}, partial={self.partial}, "
+            f"share_weights={self.share_weights}"
         )
         if self.gauge_type == "projected_ref":
             s1, s2 = self.singularity_1, self.singularity_2
