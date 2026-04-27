@@ -1,0 +1,16 @@
+# Sphinx core
+sphinx>=7.0
+sphinx-rtd-theme>=2.0
+
+# Markdown support
+myst-parser>=3.0
+
+# Automatic API generation from source
+sphinx-autoapi>=3.0
+
+# Jupyter notebooks as doc pages
+nbsphinx>=0.9
+ipykernel
+
+# Math rendering
+sphinx-mathjax-offline

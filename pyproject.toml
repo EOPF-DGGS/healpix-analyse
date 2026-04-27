@@ -27,6 +27,29 @@ dependencies = [
   "healpix-geo",
 ]
 
+[project.optional-dependencies]
+docs = [
+  "sphinx>=7.0",
+  "sphinx-rtd-theme>=2.0",
+  "myst-parser>=3.0",
+  "sphinx-autoapi>=3.0",
+  "nbsphinx>=0.9",
+  "ipykernel",
+]
+dev = [
+  "healpix-analyse[docs]",
+  "pytest",
+  "healpy",
+  "scipy",
+  "matplotlib",
+]
+
+[project.urls]
+Homepage = "https://github.com/EOPF-DGGS/healpix-analyse"
+Documentation = "https://healpix-analyse.readthedocs.io"
+Repository = "https://github.com/EOPF-DGGS/healpix-analyse"
+Issues = "https://github.com/EOPF-DGGS/healpix-analyse/issues"
+
 [tool.setuptools.packages.find]
 include = [
     "healpix_analyse",
