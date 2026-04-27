@@ -23,7 +23,7 @@ extensions = [
     "sphinx.ext.viewcode",     # Links to source code
     "sphinx.ext.intersphinx",  # Cross-references to external docs
     "sphinx.ext.mathjax",      # Math rendering
-    "myst_nb",                 # Markdown + Jupyter notebooks (myst-nb includes myst-parser)
+    "myst_nb",                 # Markdown + Jupyter notebooks (inclut myst_parser)
 ]
 
 # MyST / myst-nb configuration
@@ -99,10 +99,9 @@ html_title = "healpix-analyse"
 html_static_path = ["_static"]
 
 # ---------------------------------------------------------------------------
-# Source suffixes
+# Source suffixes — laisser myst_parser et myst_nb les enregistrer eux-mêmes
 # ---------------------------------------------------------------------------
-source_suffix = {
-    ".rst": "restructuredtext",
-    ".md": "myst",
-    ".ipynb": "myst-nb",
-}
+# Ne pas déclarer manuellement "myst" ou "myst-nb" comme parsers :
+# myst_parser enregistre automatiquement .md, myst_nb enregistre .ipynb.
+# Une déclaration manuelle ici provoquerait "Source parser for myst not registered".
+source_suffix = [".rst", ".md", ".ipynb"]

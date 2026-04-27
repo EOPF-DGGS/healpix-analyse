@@ -26,12 +26,6 @@ and multi-resolution up/downsampling operators — all differentiable through Py
 
 .. toctree::
    :maxdepth: 1
-   :caption: Notebooks
-
-   notebooks/index
-
-.. toctree::
-   :maxdepth: 1
    :caption: API Reference
 
    api/index
