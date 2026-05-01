@@ -26,7 +26,7 @@ dependencies = [
   "torch",
   "healpix-geo",
   "pyproj>=3.6",
-  ]
+]
 
 [project.optional-dependencies]
 docs = [
@@ -36,19 +36,10 @@ docs = [
   "sphinx-autoapi>=3.0",
   "sphinx-design>=0.5",
 ]
-dev = [
-  "healpix-analyse[docs]",
-  "pytest",
-  "healpy",
-  "scipy",
-  "matplotlib",
-]
 
 [project.urls]
-Homepage = "https://github.com/EOPF-DGGS/healpix-analyse"
 Documentation = "https://eopf-dggs.github.io/healpix-analyse/"
 Repository = "https://github.com/EOPF-DGGS/healpix-analyse"
-Issues = "https://github.com/EOPF-DGGS/healpix-analyse/issues"
 
 [tool.setuptools.packages.find]
 include = [
@@ -57,4 +48,3 @@ include = [
 ]
 
 [tool.setuptools_scm]
-fallback_version = "0.0.0"
